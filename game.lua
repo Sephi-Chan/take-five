@@ -1,10 +1,12 @@
 local FSM = require("lib.fsm")
+local JSON = require("lib.json")
 
 local Game = {
-  NIL_CARD      = -1,
-  HAND_SIZE     = 10,
-  COLUMNS_COUNT = 4,
-  COLUMN_SIZE   = 5
+  NIL_CARD         = -1,
+  REPLACEMENT_CARD = -2,
+  HAND_SIZE        = 10,
+  COLUMNS_COUNT    = 4,
+  COLUMN_SIZE      = 5
 }
 
 
@@ -13,14 +15,17 @@ function Game.create()
     initial = "idle",
 
     events = {
-      { name = "add_player",    from = "idle", to = "idle" },
-      { name = "remove_player", from = "idle", to = "idle" },
-
-      { name = "start_game", from = "idle", to = "waiting_for_choices || idle" },
-
-      { name = "player_picks_card", from = "waiting_for_choices", to = "waiting_for_choices || waiting_for_column_replacement || finished" },
-
-      { name = "player_replaces_column", from = "waiting_for_column_replacement", to = "waiting_for_choices || finished" }
+      { name = "player_joins",           from = "idle",                           to = "idle" },
+      { name = "player_leaves",          from = "idle",                           to = "idle" },
+      { name = "start_game",             from = "idle",                           to = "waiting_for_choices" },
+      { name = "start_game",             from = "idle",                           to = "waiting_for_choices" },
+      { name = "player_picks_card",      from = "waiting_for_choices",            to = "waiting_for_choices" },
+      { name = "player_picks_card",      from = "waiting_for_choices",            to = "waiting_for_resolution" },
+      { name = "resolve_round",          from = "waiting_for_resolution",         to = "waiting_for_choices" },
+      { name = "resolve_round",          from = "waiting_for_resolution",         to = "waiting_for_column_replacemen" },
+      { name = "resolve_round",          from = "waiting_for_resolution",         to = "finished" },
+      { name = "player_replaces_column", from = "waiting_for_column_replacement", to = "waiting_for_choices" },
+      { name = "player_replaces_column", from = "waiting_for_column_replacement", to = "finished" }
     },
 
     callbacks = {
@@ -36,7 +41,7 @@ function Game.create()
       end,
 
 
-      on_add_player = function(self, event, from, to, player_name)
+      on_player_joins = function(self, event, from, to, player_name)
         table.insert(self.data.players, player_name)
         table.insert(self.data.hands,   {})
         table.insert(self.data.choices, Game.NIL_CARD)
@@ -44,7 +49,7 @@ function Game.create()
       end,
 
 
-      on_remove_player = function(self, event, from, to, player_name)
+      on_player_leaves = function(self, event, from, to, player_name)
         local player_index = indexOf(self.data.players, player_name)
 
         if player_index then
@@ -86,28 +91,30 @@ function Game.create()
         assert(player_index, "The player is not in the game.")
         assert(card_index, "The player doesn't have the card.")
 
-        self.data.replacement = {}
         self.data.choices[player_index] = card
 
         if did_all_player_choose(self.data.choices) then
-          local needs_replacement, replacing_player_index, replacing_card = is_replacement_needed(self.data.columns, self.data.choices)
-
-          if needs_replacement then
-            self.current = "waiting_for_column_replacement"
-            self.data.replacement.replacing_player_index = replacing_player_index
-            self.data.replacement.replacing_card        = replacing_card
-
-          else
-            resolve_choices(self)
-          end
-
-        else -- continue current round
+          self.current = "waiting_for_resolution"
+        else
           self.current = "waiting_for_choices"
         end
       end,
 
 
-      on_player_replaces_column = function(self, event, from, to, player_name, column_index, card)
+      on_resolve_round = function(self, event, from, to)
+        local needs_replacement, replacing_player_index, replacing_card = is_replacement_needed(self.data.columns, self.data.choices)
+
+        if needs_replacement then
+          self.current = "waiting_for_column_replacement"
+          self.data.replacement.replacing_player_index = replacing_player_index
+          self.data.replacement.replacing_card         = replacing_card
+        else
+          resolve_choices(self)
+        end
+      end,
+
+
+      on_player_replaces_column = function(self, event, from, to, player_name, column_index)
         local player_index = index_of(self.data.players, player_name)
         local needs_replacement, replacing_player_index, replacing_card = is_replacement_needed(self.data.columns, self.data.choices)
 
@@ -117,10 +124,15 @@ function Game.create()
 
         for i = 1, #self.data.columns[column_index] do
           table.insert(self.data.burden[player_index], self.data.columns[column_index][i])
-          table.remove(self.data.columns[column_index], 1)
         end
+        self.data.columns[column_index] = { replacing_card }
+        self.data.choices[player_index] = Game.REPLACEMENT_CARD
+
+        card_index = index_of(self.data.hands[player_index], replacing_card)
+        table.remove(self.data.hands[player_index], card_index)
 
         resolve_choices(self)
+        self.data.replacement = {}
       end
     }
   })
@@ -137,21 +149,22 @@ function resolve_choices(self)
   end
   table.sort(sorted_cards)
 
-  for sorted_card_index = 1, #sorted_cards do
-    local card              = sorted_cards[sorted_card_index]
-    local player_index      = player_for_card[card]
-    local best_column_index = find_best_column_index(card, self.data.columns)
-    local card_hand_index   = index_of(self.data.hands[player_index], card)
+  for sorted_card_index, card in ipairs(sorted_cards) do
+    if card ~= Game.REPLACEMENT_CARD then
+      local player_index      = player_for_card[card]
+      local best_column_index = find_best_column_index(card, self.data.columns)
+      local card_hand_index   = index_of(self.data.hands[player_index], card)
 
-    if #self.data.columns[best_column_index] == Game.COLUMN_SIZE then
-      for card_index = 1, #self.data.columns[best_column_index] do
-        table.insert(self.data.burden[player_index], self.data.columns[best_column_index][card_index])
+      if #self.data.columns[best_column_index] == Game.COLUMN_SIZE then
+        for card_index = 1, #self.data.columns[best_column_index] do
+          table.insert(self.data.burden[player_index], self.data.columns[best_column_index][card_index])
+        end
+        self.data.columns[best_column_index] = {}
       end
-      self.data.columns[best_column_index] = {}
-    end
 
-    table.remove(self.data.hands[player_index], card_hand_index)
-    table.insert(self.data.columns[best_column_index], card)
+      table.remove(self.data.hands[player_index], card_hand_index)
+      table.insert(self.data.columns[best_column_index], card)
+    end
   end
 
   if is_game_finished(self.data) then

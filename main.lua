@@ -1,6 +1,7 @@
 io.stdout:setvbuf('no')
 if arg[#arg] == "-debug" then require("mobdebug").start() end
 
+local Deck = require("deck")
 local Game = require("game")
 local UI   = require("ui")
 local JSON = require("lib.json")
@@ -14,29 +15,68 @@ function love.load()
   ui             = UI.create(love.graphics.getWidth(), love.graphics.getHeight())
   current_player = 1
 
-  game.add_player("corwin")
-  game.add_player("mandor")
-  game.add_player("eric")
-  game.start_game(shuffle(deck()))
-  game.player_picks_card("corwin", 68)
-  game.player_picks_card("mandor", 35)
-  game.player_picks_card("eric", 42)
+  local deck = Deck.create(104)
 
-  game.player_picks_card("corwin", 56)
-  game.player_picks_card("mandor", 51)
-  game.player_picks_card("eric", 95)
+ game.player_joins("corwin")
+ game.player_joins("mandor")
+ game.player_joins("eric")
+ game.start_game(Deck.shuffle(deck))
 
-  game.player_picks_card("corwin", 63)
-  game.player_picks_card("mandor", 22)
-  game.player_picks_card("eric", 26)
+  -- game.player_picks_card("corwin", 68)
+  -- game.player_picks_card("mandor", 35)
+  -- game.player_picks_card("eric", 42)
+  -- game.resolve_round()
 
-  game.player_picks_card("corwin", 29)
-  game.player_picks_card("mandor", 100)
-  game.player_picks_card("eric", 104)
+  -- game.player_picks_card("corwin", 56)
+  -- game.player_picks_card("mandor", 51)
+  -- game.player_picks_card("eric", 95)
+  -- game.resolve_round()
 
-  game.player_picks_card("corwin", 76)
-  game.player_picks_card("mandor", 28)
-  game.player_picks_card("eric", 20)
+  -- game.player_picks_card("corwin", 63)
+  -- game.player_picks_card("mandor", 22)
+  -- game.player_picks_card("eric", 26)
+  -- game.resolve_round()
+
+  -- game.player_picks_card("corwin", 29)
+  -- game.player_picks_card("mandor", 100)
+  -- game.player_picks_card("eric", 104)
+  -- game.resolve_round()
+
+  -- game.player_picks_card("corwin", 76)
+  -- game.player_picks_card("mandor", 28)
+  -- game.player_picks_card("eric", 20)
+  -- game.resolve_round()
+
+  -- game.player_replaces_column("eric", 3)
+
+  -- game.player_picks_card("corwin", 40)
+  -- game.player_picks_card("mandor", 48)
+  -- game.player_picks_card("eric", 45)
+  -- game.resolve_round()
+
+  -- game.player_picks_card("corwin", 50)
+  -- game.player_picks_card("mandor", 52)
+  -- game.player_picks_card("eric", 97)
+  -- game.resolve_round()
+
+  -- game.player_picks_card("corwin", 73)
+  -- game.player_picks_card("mandor", 88)
+  -- game.player_picks_card("eric", 98)
+  -- game.resolve_round()
+
+  -- game.player_picks_card("corwin", 14)
+  -- game.player_picks_card("mandor", 101)
+  -- game.player_picks_card("eric", 20)
+  -- game.resolve_round()
+
+  -- game.player_replaces_column("corwin", 2)
+
+  -- game.player_picks_card("corwin", 92)
+  -- game.player_picks_card("mandor", 91)
+  -- game.player_picks_card("eric", 5)
+  -- game.resolve_round()
+
+  -- game.player_replaces_column("eric", 3)
 end
 
 
@@ -44,14 +84,11 @@ function love.update(delta)
   mouse.x = love.mouse.getX()
   mouse.y = love.mouse.getY()
   UI.update(ui, mouse, game, current_player)
-
-  _track("state", game.current)
-  _track("replacement", JSON.encode(game.data.replacement))
 end
 
 
 function love.draw()
-  UI.draw(ui)
+  UI.draw(ui, game)
   _show_dump(10, 10)
 end
 
@@ -68,36 +105,45 @@ end
 
 
 function love.mousepressed(mouse_x, mouse_y, button)
-  if game.current == "waiting_for_choices" and ui.hand.y < mouse_y then
-    for card_index = 1, #ui.hand.cards do
-      local card = ui.hand.cards[card_index]
-      if card.x <= mouse_x and mouse_x <= card.x + card.width then
-        local player_name = game.data.players[current_player]
-        local value = game.data.hands[current_player][card_index]
-        game.player_picks_card(player_name, game.data.hands[current_player][card_index])
+  local player_name = game.data.players[current_player]
+
+  if game.is("waiting_for_choices") then
+    player_picks_card(player_name, mouse_x, mouse_y)
+
+  elseif game.is("waiting_for_column_replacement") then
+    player_replaces_column(player_name, mouse_x, mouse_y)
+  end
+end
+
+
+function player_picks_card(player_name, mouse_x, mouse_y)
+  local card_index = UI.card_at_coordinates(ui, mouse_x, mouse_y, ui.hand)
+
+  if card_index then
+    local card = game.data.hands[current_player][card_index]
+
+    game.player_picks_card(player_name, card)
+
+    if game.can("resolve_round") then
+      game.resolve_round()
+    end
+  end
+end
+
+
+function player_replaces_column(player_name, mouse_x, mouse_y)
+  if game.data.replacement.replacing_player_index == current_player then
+    for column_index, ui_column in ipairs(ui.board.columns) do
+      local card_index = UI.card_at_coordinates(ui, mouse_x, mouse_y, ui_column)
+
+      if card_index then
+        game.player_replaces_column(player_name, column_index)
         break
       end
     end
   end
 end
 
-
-function deck()
-  local cards = {}
-  for i = 1, 104 do
-    cards[i] = i
-  end
-  return cards
-end
-
-
-function shuffle(table)
-  for i = #table, 1, -1 do
-    local j = math.random(i)
-    table[i], table[j] = table[j], table[i]
-  end
-  return table
-end
 
 
 _dumped_values = {}
